@@ -1,8 +1,8 @@
 {
   "id": "aeo-monitor",
   "name": "AEO Monitor",
-  "version": "0.1.0",
-  "description": "Daily AEO (Answer Engine Optimization) visibility scorecard for Nomie",
+  "version": "0.2.0",
+  "description": "Daily AEO (Answer Engine Optimization) visibility scorecard for Nomie Wellness",
   "author": "clawdbot",
   "main": "index.ts",
   "configSchema": {
@@ -11,12 +11,10 @@
     "properties": {
       "runHourUtc": {"type": "number", "default": 5, "description": "Hour (UTC) to run daily. 9am GST = 5 UTC."},
       "runMinuteUtc": {"type": "number", "default": 0, "description": "Minute (UTC) to run daily."},
-      "logDir": {"type": "string", "default": "/home/clawdbot/clawd/skills/aeo-monitor/logs", "description": "Where monitor.py writes jsonl/csv logs."},
-      "pythonPath": {"type": "string", "default": "python3", "description": "Python executable to run monitor.py"},
-      "scriptPath": {"type": "string", "default": "/home/clawdbot/clawd/skills/aeo-monitor/monitor.py", "description": "Path to the AEO monitor script"},
+      "logDir": {"type": "string", "default": "/home/clawdbot/clawd/skills/aeo-monitor/logs", "description": "Where JSONL detail logs and CSV score history are written."},
 
-      "openaiApiKey": {"type": "string", "secret": true, "description": "OPENAI_API_KEY for ChatGPT query tier"},
-      "geminiApiKey": {"type": "string", "secret": true, "description": "GEMINI_API_KEY for Gemini query tier"},
+      "openaiApiKey": {"type": "string", "secret": true, "description": "OPENAI_API_KEY for ChatGPT (GPT-4o-mini) query tier"},
+      "geminiApiKey": {"type": "string", "secret": true, "description": "GEMINI_API_KEY for Gemini (2.5-flash) query tier"},
 
       "slackBotToken": {"type": "string", "secret": true, "description": "Slack bot token (xoxb-...)"},
       "slackChannelId": {"type": "string", "default": "C0ABW156NKX", "description": "Slack channel ID to post scorecard (default: #nomie-marketing)"},
