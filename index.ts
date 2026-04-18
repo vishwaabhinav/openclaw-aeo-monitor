@@ -6,6 +6,7 @@ import axios from "axios";
 import { loadState, saveState } from "./src/state.js";
 import { readScores, type ScoreRow } from "./src/csv.js";
 import { runMonitor, type Summary } from "./src/monitor.js";
+import { runGapQueue, type GapQueueOptions } from "./src/gap-queue.js";
 
 type Config = {
   runHourUtc: number;
@@ -145,7 +146,9 @@ const plugin = {
           onProgress: log,
         });
 
-        const csvPath = path.join(config.logDir, "aeo-scores-v2.csv");
+        // NOTE: plugin originally used aeo-scores-v2.csv, but production writes aeo-scores.csv
+        // (legacy headerless CSV). Keep pointing at the canonical file.
+        const csvPath = path.join(config.logDir, "aeo-scores.csv");
         const rows = readScores(csvPath);
         const { prev, week } = getPrevRows(rows);
 
@@ -277,6 +280,68 @@ const plugin = {
           }
         } finally {
           running = false;
+        }
+      },
+    });
+
+    // Gap queue tool — feed failing AEO queries into TOMORROW-POSTS.md
+    api.registerTool({
+      name: "aeo_gap_queue_run",
+      description: "Read AEO monitor failures and queue them as blog targets in TOMORROW-POSTS.md",
+      parameters: {
+        type: "object",
+        properties: {
+          dryRun: { type: "boolean", description: "If true, do not commit or push" },
+          maxToAdd: { type: "number", description: "Max queries to queue (default 3)" },
+        },
+        required: [],
+      },
+      async execute(args: { dryRun?: boolean; maxToAdd?: number }) {
+        const config = getConfig();
+        const dryRun = Boolean(args?.dryRun);
+        const maxToAdd = args?.maxToAdd ?? 3;
+
+        const opts: GapQueueOptions = {
+          logDir: config.logDir,
+          repoPath: "/home/clawdbot/.clawdbot/extensions/aeo-monitor/data/nomie-website",
+          tomorrowPostsPath: "/home/clawdbot/.clawdbot/extensions/aeo-monitor/data/nomie-website/TOMORROW-POSTS.md",
+          lookbackDays: 7,
+          maxToAdd,
+          commitAndPush: !dryRun,
+          onLog: (m: string) => log(`[gap-queue] ${m}`),
+        };
+
+        try {
+          const result = await runGapQueue(opts);
+          const slackText = [
+            `AEO gap queue — ${new Date().toISOString().slice(0, 10)}`,
+            "",
+            result.message,
+            ...(result.picked.length > 0
+              ? [
+                  "",
+                  "Queued:",
+                  ...result.picked.map((p) => `  - ${p.query} (${p.tier}, failed ${p.daysFailing}d on ${p.engines.join(" + ")})`),
+                  "",
+                  "The existing nomie-seo-nightly cron will pick these up.",
+                ]
+              : []),
+          ].join("\n");
+
+          if (!dryRun && config.slackBotToken) {
+            await postToSlack(config.slackBotToken, config.slackChannelId, slackText);
+          }
+
+          return {
+            content: [{ type: "text", text: JSON.stringify({ ok: true, ...result }, null, 2) }],
+            details: { ok: true, picked: result.picked.length },
+          };
+        } catch (e: any) {
+          const err = String(e?.message || e);
+          log(`[gap-queue] error: ${err}`);
+          return {
+            content: [{ type: "text", text: JSON.stringify({ ok: false, error: err }, null, 2) }],
+          };
         }
       },
     });
