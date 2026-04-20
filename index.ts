@@ -6,7 +6,6 @@ import axios from "axios";
 import { loadState, saveState } from "./src/state.js";
 import { readScores, type ScoreRow } from "./src/csv.js";
 import { runMonitor, type Summary } from "./src/monitor.js";
-import { runGapQueue, type GapQueueOptions } from "./src/gap-queue.js";
 import { runFreshness, formatSlackReport, type FreshnessOptions } from "./src/freshness.js";
 
 type Config = {
@@ -285,94 +284,9 @@ const plugin = {
       },
     });
 
-    // Gap queue tool — feed failing AEO queries into TOMORROW-POSTS.md
-    api.registerTool({
-      name: "aeo_gap_queue_run",
-      description: "Read AEO monitor failures and queue them as blog targets in TOMORROW-POSTS.md",
-      parameters: {
-        type: "object",
-        properties: {
-          dryRun: { type: "boolean", description: "If true, do not commit or push" },
-          maxToAdd: { type: "number", description: "Max queries to queue (default 3)" },
-        },
-        required: [],
-      },
-      async execute(args: { dryRun?: boolean; maxToAdd?: number }) {
-        const config = getConfig();
-        const dryRun = Boolean(args?.dryRun);
-        const maxToAdd = args?.maxToAdd ?? 3;
-
-        const opts: GapQueueOptions = {
-          logDir: config.logDir,
-          repoPath: "/home/clawdbot/.clawdbot/extensions/aeo-monitor/data/nomie-website",
-          tomorrowPostsPath: "/home/clawdbot/.clawdbot/extensions/aeo-monitor/data/nomie-website/TOMORROW-POSTS.md",
-          lookbackDays: 7,
-          maxToAdd,
-          commitAndPush: !dryRun,
-          onLog: (m: string) => log(`[gap-queue] ${m}`),
-        };
-
-        try {
-          const result = await runGapQueue(opts);
-          const slackText = [
-            `AEO gap queue — ${new Date().toISOString().slice(0, 10)}`,
-            "",
-            result.message,
-            ...(result.picked.length > 0
-              ? [
-                  "",
-                  "Queued:",
-                  ...result.picked.map((p) => `  - ${p.query} (${p.tier}, failed ${p.daysFailing}d on ${p.engines.join(" + ")})`),
-                  "",
-                  "The existing nomie-seo-nightly cron will pick these up.",
-                ]
-              : []),
-          ].join("\n");
-
-          if (!dryRun && config.slackBotToken) {
-            await postToSlack(config.slackBotToken, config.slackChannelId, slackText);
-          }
-
-          // Explicit summary so a Claude agent running this cron does not
-          // double-commit or "fix" the output. The tool already pushed.
-          const agentNotice = result.committed
-            ? `SUCCESS. The plugin committed ${result.commitSha?.slice(0, 7)} and pushed to origin/main in its dedicated workspace. DO NOT make any additional commits or pushes for this task. The work is complete.`
-            : dryRun
-              ? "DRY RUN — no commit made. This was intentional. No further action needed."
-              : "NOTE: commit/push step reported no action (likely nothing to queue). DO NOT commit anything manually — this tool owns TOMORROW-POSTS.md.";
-
-          return {
-            content: [
-              {
-                type: "text",
-                text: JSON.stringify(
-                  {
-                    ok: true,
-                    agentNotice,
-                    committed: result.committed,
-                    commitSha: result.commitSha,
-                    pushed: result.pushed,
-                    branch: result.branch,
-                    picked: result.picked,
-                    skipped: result.skipped,
-                    message: result.message,
-                  },
-                  null,
-                  2
-                ),
-              },
-            ],
-            details: { ok: true, picked: result.picked.length, committed: result.committed, sha: result.commitSha },
-          };
-        } catch (e: any) {
-          const err = String(e?.message || e);
-          log(`[gap-queue] error: ${err}`);
-          return {
-            content: [{ type: "text", text: JSON.stringify({ ok: false, error: err }, null, 2) }],
-          };
-        }
-      },
-    });
+    // Gap queue moved to nomie-marketing plugin's unified writer as of
+    // 2026-04-20 cutover. This plugin emits AEO failure telemetry only;
+    // nomie-marketing reads those JSONL logs and owns TOMORROW-POSTS.md.
 
     // Freshness tool — scan external source URLs in blog posts for broken links
     api.registerTool({
