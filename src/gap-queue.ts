@@ -231,6 +231,10 @@ export async function runGapQueue(opts: GapQueueOptions): Promise<{
   picked: QueryFailure[];
   skipped: number;
   message: string;
+  committed: boolean;
+  commitSha?: string;
+  pushed: boolean;
+  branch: string;
 }> {
   const { logDir, repoPath, tomorrowPostsPath, lookbackDays, maxToAdd, commitAndPush, onLog } = opts;
   const log = (m: string) => onLog?.(m);
@@ -269,12 +273,20 @@ export async function runGapQueue(opts: GapQueueOptions): Promise<{
     return {
       picked: [],
       skipped: failures.length - unique.length,
-      message: "No new failing queries to queue.",
+      message:
+        "No new failing queries to queue. DONE — no further action needed. Do NOT commit or push anything manually; this tool owns TOMORROW-POSTS.md.",
+      committed: false,
+      pushed: false,
+      branch: "main",
     };
   }
 
   log(`Picked ${picks.length}: ${picks.map((p) => p.query).join(" | ")}`);
   updateTomorrowPosts(tomorrowPostsPath, picks);
+
+  let committed = false;
+  let pushed = false;
+  let commitSha: string | undefined;
 
   if (commitAndPush) {
     try {
@@ -290,16 +302,31 @@ ${slugs}
 See existing blog pipeline (nomie-seo-nightly) to produce posts."`,
         { stdio: "pipe" }
       );
-      execSync(`cd "${repoPath}" && git push`, { stdio: "pipe" });
-      log(`Committed and pushed ${picks.length} new queue items`);
+      commitSha = execSync(`cd "${repoPath}" && git rev-parse HEAD`, { encoding: "utf8" }).trim();
+      committed = true;
+      execSync(`cd "${repoPath}" && git push origin main`, { stdio: "pipe" });
+      pushed = true;
+      log(`Committed ${commitSha.slice(0, 7)} and pushed ${picks.length} new queue items to origin/main`);
     } catch (e: any) {
       log(`Commit/push failed: ${String(e?.message || e)}`);
     }
   }
 
+  const commitLine = committed
+    ? `Committed as ${commitSha?.slice(0, 7)} and pushed to origin/main.`
+    : "No commit made (commitAndPush=false).";
+
   return {
     picked: picks,
     skipped: failures.length - unique.length,
-    message: `Queued ${picks.length} posts. Skipped ${failures.length - unique.length} duplicates.`,
+    message: [
+      `Queued ${picks.length} posts to TOMORROW-POSTS.md. Skipped ${failures.length - unique.length} duplicates.`,
+      commitLine,
+      "DONE — this tool owns TOMORROW-POSTS.md. Do NOT commit or push anything else for this task; the work is complete on origin/main.",
+    ].join(" "),
+    committed,
+    commitSha,
+    pushed,
+    branch: "main",
   };
 }

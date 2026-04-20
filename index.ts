@@ -7,6 +7,7 @@ import { loadState, saveState } from "./src/state.js";
 import { readScores, type ScoreRow } from "./src/csv.js";
 import { runMonitor, type Summary } from "./src/monitor.js";
 import { runGapQueue, type GapQueueOptions } from "./src/gap-queue.js";
+import { runFreshness, formatSlackReport, type FreshnessOptions } from "./src/freshness.js";
 
 type Config = {
   runHourUtc: number;
@@ -332,13 +333,102 @@ const plugin = {
             await postToSlack(config.slackBotToken, config.slackChannelId, slackText);
           }
 
+          // Explicit summary so a Claude agent running this cron does not
+          // double-commit or "fix" the output. The tool already pushed.
+          const agentNotice = result.committed
+            ? `SUCCESS. The plugin committed ${result.commitSha?.slice(0, 7)} and pushed to origin/main in its dedicated workspace. DO NOT make any additional commits or pushes for this task. The work is complete.`
+            : dryRun
+              ? "DRY RUN — no commit made. This was intentional. No further action needed."
+              : "NOTE: commit/push step reported no action (likely nothing to queue). DO NOT commit anything manually — this tool owns TOMORROW-POSTS.md.";
+
           return {
-            content: [{ type: "text", text: JSON.stringify({ ok: true, ...result }, null, 2) }],
-            details: { ok: true, picked: result.picked.length },
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    ok: true,
+                    agentNotice,
+                    committed: result.committed,
+                    commitSha: result.commitSha,
+                    pushed: result.pushed,
+                    branch: result.branch,
+                    picked: result.picked,
+                    skipped: result.skipped,
+                    message: result.message,
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+            details: { ok: true, picked: result.picked.length, committed: result.committed, sha: result.commitSha },
           };
         } catch (e: any) {
           const err = String(e?.message || e);
           log(`[gap-queue] error: ${err}`);
+          return {
+            content: [{ type: "text", text: JSON.stringify({ ok: false, error: err }, null, 2) }],
+          };
+        }
+      },
+    });
+
+    // Freshness tool — scan external source URLs in blog posts for broken links
+    api.registerTool({
+      name: "aeo_freshness_check",
+      description: "Scan blog post authority.sources URLs for broken/dead links and report to Slack",
+      parameters: {
+        type: "object",
+        properties: {
+          timeoutMs: { type: "number", description: "Per-request timeout in ms (default 10000)" },
+          concurrency: { type: "number", description: "Parallel HEAD checks (default 8)" },
+          dryRun: { type: "boolean", description: "If true, do not post to Slack" },
+        },
+        required: [],
+      },
+      async execute(args: { timeoutMs?: number; concurrency?: number; dryRun?: boolean }) {
+        const config = getConfig();
+        const dryRun = Boolean(args?.dryRun);
+
+        const opts: FreshnessOptions = {
+          repoPath: "/home/clawdbot/.clawdbot/extensions/aeo-monitor/data/nomie-website",
+          logDir: config.logDir,
+          timeoutMs: args?.timeoutMs ?? 10_000,
+          concurrency: args?.concurrency ?? 8,
+          onLog: (m: string) => log(`[freshness] ${m}`),
+        };
+
+        try {
+          const report = await runFreshness(opts);
+          const slackText = formatSlackReport(report);
+
+          if (!dryRun && config.slackBotToken) {
+            await postToSlack(config.slackBotToken, config.slackChannelId, slackText);
+          }
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify(
+                  {
+                    ok: true,
+                    scanned: report.scanned,
+                    broken: report.broken,
+                    errors: report.errors,
+                    totalPosts: report.totalPosts,
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+            details: { ok: true, broken: report.broken, errors: report.errors },
+          };
+        } catch (e: any) {
+          const err = String(e?.message || e);
+          log(`[freshness] error: ${err}`);
           return {
             content: [{ type: "text", text: JSON.stringify({ ok: false, error: err }, null, 2) }],
           };
